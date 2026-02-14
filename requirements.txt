@@ -1,0 +1,14 @@
+# Core dependencies
+python-xlib>=0.33; sys_platform == "linux"
+
+# Emotiv Cortex API
+websocket-client>=1.6.0
+
+# LLM Agent (OpenAI-compatible API)
+openai>=1.0.0
+
+# Optional: load .env file
+python-dotenv>=1.0.0
+
+# Web reader (Firefox active tab URL + content)
+lz4>=4.0.0
