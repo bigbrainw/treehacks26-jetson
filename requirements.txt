@@ -1,8 +1,11 @@
 # Core dependencies
 python-xlib>=0.33; sys_platform == "linux"
 
-# Emotiv Cortex API
+# Emotiv Cortex API + Mac collector → Jetson
 websocket-client>=1.6.0
+
+# Jetson processor (HTTP + WebSocket)
+aiohttp>=3.9.0
 
 # LLM Agent (OpenAI-compatible API)
 openai>=1.0.0

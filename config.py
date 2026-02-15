@@ -32,3 +32,9 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "phi3:mini")  # small models for J
 MULTITURN_AGENT = os.environ.get("MULTITURN_AGENT", "true").lower() in ("1", "true", "yes")
 FOLLOW_UP_INTERVAL = int(os.environ.get("FOLLOW_UP_INTERVAL", "90"))  # sec between follow-ups
 FETCH_WEB_CONTENT = os.environ.get("FETCH_WEB_CONTENT", "true").lower() in ("1", "true", "yes")
+
+# Split architecture: Mac (activity + EEG) -> Jetson (processor only)
+# - Mac: collector.py - activity monitoring + EEG, sends both via WebSocket
+# - Jetson: processor_main.py - receives activity + EEG, runs agent. No local monitoring.
+JETSON_WS_URL = os.environ.get("JETSON_WS_URL", "ws://localhost:8765")
+JETSON_WS_PORT = int(os.environ.get("JETSON_WS_PORT", "8765"))

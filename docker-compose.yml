@@ -1,0 +1,36 @@
+# Processor (Jetson) + ngrok for Mac collector over the internet
+#
+# ngrok.yml uses web_addr: 4041 so this doesn't conflict with SSH ngrok on 4040.
+# Mac monitors activity + EEG; Jetson receives and runs the agent.
+#
+# Usage:
+#   1. Add NGROK_AUTHTOKEN to .env (from https://dashboard.ngrok.com/get-started/your-authtoken)
+#   2. docker compose up -d
+#   3. Get ngrok URL: curl -s localhost:4041/api/tunnels | python -m json.tool
+#   4. Mac: JETSON_WS_URL=wss://YOUR_NGROK_URL python collector.py
+#      (replace https with wss for WebSocket)
+
+services:
+  processor:
+    build: .
+    network_mode: host
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434/v1}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-phi3:mini}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok
+    network_mode: host
+    depends_on:
+      - processor
+    volumes:
+      - ./ngrok.yml:/etc/ngrok.yml
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+      - NGROK_CONFIG=/etc/ngrok.yml
+    # ngrok.yml sets web_addr: 4041 to avoid conflict with SSH ngrok on 4040
+    command: ["http", "localhost:8765"]
+    restart: unless-stopped

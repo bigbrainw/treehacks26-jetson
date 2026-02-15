@@ -1,11 +1,11 @@
-"""Cross-platform activity monitor - tracks app, website, file in use."""
+"""Activity monitor - tracks app, website, file in use. Linux (X11) and macOS supported."""
 
 import platform
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from .linux import get_active_window_x11, infer_context_type, WindowInfo
+from .linux import get_active_window_x11, infer_context_type as infer_context_type_linux, WindowInfo
 
 
 @dataclass
@@ -46,12 +46,15 @@ class ActivityMonitor:
     def get_current_activity(self) -> Optional[ActivityContext]:
         """Get the current activity context. Returns None if detection fails."""
         system = platform.system()
-
         if system == "Linux":
             winfo = get_active_window_x11()
+            infer_context_type = infer_context_type_linux
+        elif system == "Darwin":
+            from .macos import get_active_window_macos, infer_context_type as infer_context_type_macos
+            winfo = get_active_window_macos()
+            infer_context_type = infer_context_type_macos
         else:
-            # Placeholder for macOS/Windows
-            winfo = None
+            return self._last_context
 
         if not winfo:
             return self._last_context

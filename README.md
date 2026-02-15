@@ -115,6 +115,39 @@ Designed for edge deployment. No cloud dependencies for the LLM:
 2. Pull a small model: `ollama pull phi3:mini` or `qwen2:1.5b`
 3. Run the agent; it uses heuristics if Ollama is unreachable
 
+## Docker + ngrok (Mac → Jetson over internet)
+
+When Mac and Jetson are on different networks, use Docker + ngrok. **Mac does all monitoring** (activity + EEG); Jetson receives and runs the agent.
+
+**On Jetson:**
+```bash
+# Add to .env: NGROK_AUTHTOKEN=<from https://dashboard.ngrok.com>
+docker compose up -d
+
+# Get ngrok URL (ngrok.yml uses 4041 to avoid conflict with SSH ngrok on 4040):
+curl -s localhost:4041/api/tunnels | python -m json.tool
+```
+
+**Start on boot:** Both services use `restart: unless-stopped`. Ensure Docker starts on boot (`sudo systemctl enable docker`). For explicit compose-on-boot, install the systemd unit:
+```bash
+# Edit WorkingDirectory in compose.service to your project path, then:
+sudo cp compose.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable compose.service
+```
+
+**On Mac:**
+```bash
+# Use wss:// if ngrok gives https (replace https -> wss)
+JETSON_WS_URL=wss://YOUR_NGROK_URL python collector.py
+```
+
+Requirements: Ollama on Jetson; `NGROK_AUTHTOKEN` in `.env`. No X11 needed on Jetson—monitoring runs on Mac.
+
+**Mac permissions:** For activity monitoring, allow "Accessibility" for Terminal (or your Python) in System Preferences → Privacy & Security.
+
+**Collector sends:** Activity (active app/window) + EEG. **Processor receives via:** WebSocket (collector.py) or HTTP POST `/eeg` (StreamToJetson).
+
 ## Config (`config.py`)
 
 | Setting | Default | Description |
