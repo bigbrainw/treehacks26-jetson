@@ -23,6 +23,8 @@ class ActivitySnapshot:
     context_type: str  # "app" | "website" | "file" | "browser" | "terminal"
     context_id: str
     detected_at: float = field(default_factory=time.time)
+    reading_section: Optional[str] = None  # Section of paper/doc user is reading (from monitoring)
+    page_content: Optional[str] = None  # Extracted PDF page text (Mac only, for stuck-point analysis)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -35,6 +37,8 @@ class ActivitySnapshot:
             context_type=d.get("context_type", "app"),
             context_id=d.get("context_id", ""),
             detected_at=d.get("detected_at", time.time()),
+            reading_section=d.get("reading_section"),
+            page_content=d.get("page_content"),
         )
 
     def to_activity_context(self) -> "ActivityContext":
@@ -46,17 +50,21 @@ class ActivitySnapshot:
             context_type=self.context_type,
             context_id=self.context_id,
             detected_at=self.detected_at,
+            reading_section=self.reading_section,
+            page_content=self.page_content,
         )
 
     @classmethod
     def from_activity_context(cls, ctx: "ActivityContext") -> "ActivitySnapshot":
-        """Create from ActivityContext (e.g. from collector's ActivityMonitor)."""
+        """Create from ActivityContext (e.g. from received payload)."""
         return cls(
             app_name=ctx.app_name,
             window_title=ctx.window_title,
             context_type=ctx.context_type,
             context_id=ctx.context_id,
             detected_at=ctx.detected_at,
+            reading_section=getattr(ctx, "reading_section", None),
+            page_content=getattr(ctx, "page_content", None),
         )
 
 
@@ -89,15 +97,36 @@ class EEGMetricsSnapshot:
 
 
 @dataclass
+class MentalCommandSnapshot:
+    """Mental command from Emotiv com stream (act, pow)."""
+
+    action: str  # e.g. push, pull, lift
+    power: float  # 0-1
+    timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {"action": self.action, "power": self.power, "timestamp": self.timestamp}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MentalCommandSnapshot":
+        return cls(
+            action=d.get("action", "neutral"),
+            power=float(d.get("power", 0)),
+            timestamp=d.get("timestamp", time.time()),
+        )
+
+
+@dataclass
 class CollectorPayload:
     """
     Single payload from Mac collector to Jetson processor.
-    Can contain activity, EEG metrics, or both.
+    Can contain activity, EEG metrics, mental command, or any combination.
     """
 
-    type: str  # "activity" | "eeg" | "heartbeat"
+    type: str  # "activity" | "eeg" | "mental_command" | "heartbeat"
     activity: Optional[ActivitySnapshot] = None
     eeg: Optional[EEGMetricsSnapshot] = None
+    mental_command: Optional[MentalCommandSnapshot] = None
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -109,6 +138,8 @@ class CollectorPayload:
             d["activity"] = self.activity.to_dict()
         if self.eeg:
             d["eeg"] = self.eeg.to_dict()
+        if self.mental_command:
+            d["mental_command"] = self.mental_command.to_dict()
         return d
 
     @classmethod
@@ -121,9 +152,14 @@ class CollectorPayload:
         if "eeg" in d:
             eeg = EEGMetricsSnapshot.from_dict(d["eeg"])
 
+        mental_command = None
+        if "mental_command" in d:
+            mental_command = MentalCommandSnapshot.from_dict(d["mental_command"])
+
         return cls(
             type=d.get("type", "unknown"),
             activity=activity,
             eeg=eeg,
+            mental_command=mental_command,
             timestamp=d.get("timestamp", time.time()),
         )

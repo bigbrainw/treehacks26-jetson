@@ -14,6 +14,7 @@ Usage on Jetson:
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import signal
 import sys
@@ -60,8 +61,8 @@ def run_processor(port: int):
     storage = Storage(config.DB_PATH)
     AssistantClass = MultiTurnAssistant if config.MULTITURN_AGENT else FocusAssistant
     assistant = AssistantClass(
-        base_url=config.OLLAMA_BASE_URL,
-        model=config.OLLAMA_MODEL,
+        api_key=config.ANTHROPIC_API_KEY,
+        model=config.ANTHROPIC_MODEL,
     )
     session_tracker = SessionTracker(
         warn_threshold_sec=config.WARN_SESSION_THRESHOLD,
@@ -73,6 +74,38 @@ def run_processor(port: int):
     current_session_id = None
     prev_context_id = None
     current_context_from_mac: ActivityContext | None = None
+    prefetch_cache: dict[str, str] = {}  # context_id -> prepared_resources
+    _prefetch_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    def _prefetch_worker(ctx: ActivityContext):
+        """Background: PDF page analysis. Web search via Agent SDK when stuck."""
+        try:
+            from agent.pdf_pipeline import build_pdf_prepared_resources
+
+            section = getattr(ctx, "reading_section", None)
+            page_content = getattr(ctx, "page_content", None) or ""
+
+            if ctx.context_type == "pdf" and page_content:
+                from activity_tracker.pdf_context import parse_pdf_window_title
+                parsed = parse_pdf_window_title(ctx.app_name, ctx.window_title or "")
+                doc_name = parsed.get("doc_name", ctx.window_title or "") if parsed else ctx.window_title or ""
+                page_num = parsed.get("page_num", 1) if parsed else 1
+                result = build_pdf_prepared_resources(
+                    page_content, doc_name, page_num, section, web_related=None,
+                    api_key=config.ANTHROPIC_API_KEY, model=config.ANTHROPIC_MODEL,
+                )
+            else:
+                # Non-PDF: Agent SDK WebSearch/WebFetch when decide() is called
+                result = None
+
+            if result:
+                prefetch_cache[ctx.context_id] = result
+        except Exception:
+            pass
+
+    def _start_prefetch(ctx: ActivityContext):
+        """Start background prefetch for this context."""
+        _prefetch_executor.submit(_prefetch_worker, ctx)
 
     def on_context_change(new_ctx: ActivityContext, prev_ctx: ActivityContext | None):
         nonlocal current_session_id, prev_context_id
@@ -84,6 +117,8 @@ def run_processor(port: int):
             storage.end_session(current_session_id, duration)
         current_session_id = storage.start_session(new_ctx)
         prev_context_id = new_ctx.context_id
+        # Prefetch in background so it's ready when EEG triggers
+        _start_prefetch(new_ctx)
 
     def on_session_event(event: SessionEvent):
         print(f"  [Event] {event.event_type.value}: {event.context.display_name} ({event.duration_seconds:.0f}s)")
@@ -96,6 +131,7 @@ def run_processor(port: int):
         print(f"  [Mental State] {state_val}: {ctx.display_name} (on page {duration:.0f}s)")
         if state_val in ("stuck", "distracted", "unknown"):
             recent = storage.get_recent_sessions(limit=8)
+            prepared = prefetch_cache.get(ctx.context_id, "")
             kwargs = dict(
                 app_name=ctx.app_name,
                 window_title=ctx.window_title,
@@ -104,6 +140,7 @@ def run_processor(port: int):
                 mental_state=state_val,
                 recent_sessions=recent,
                 activity_context=ctx,
+                prepared_resources=prepared or None,
             )
             if isinstance(assistant, MultiTurnAssistant):
                 kwargs["user_feedback"] = (
@@ -123,12 +160,18 @@ def run_processor(port: int):
         ctx_data = body.get("context")
         if ctx_data:
             from data_schema import ActivitySnapshot
+            from activity_tracker.pdf_context import infer_context_type
+            app = ctx_data.get("app_name", "")
+            title = ctx_data.get("window_title", "")
+            ctx_type = ctx_data.get("context_type") or infer_context_type(app, title)
             act = ActivitySnapshot(
-                app_name=ctx_data.get("app_name", ""),
-                window_title=ctx_data.get("window_title", ""),
-                context_type=ctx_data.get("context_type", "app"),
+                app_name=app,
+                window_title=title,
+                context_type=ctx_type,
                 context_id=ctx_data.get("context_id", ""),
                 detected_at=body.get("timestamp", time.time()),
+                reading_section=ctx_data.get("reading_section"),
+                page_content=ctx_data.get("page_content"),
             )
             ctx = act.to_activity_context()
             prev_ctx = current_context_from_mac
@@ -142,6 +185,26 @@ def run_processor(port: int):
         metrics = _met_to_metrics(met)
         if metrics:
             eeg_bridge.store_metrics(metrics)
+        # Mental command (com stream) - act + pow
+        com = streams.get("com")
+        if isinstance(com, (list, tuple)) and len(com) >= 2:
+            act = com[0] if isinstance(com[0], str) else "neutral"
+            pow_val = float(com[1]) if isinstance(com[1], (int, float)) else 0.0
+            if act and act != "neutral":
+                _handle_mental_command(act, pow_val)
+
+    def _handle_mental_command(action: str, power: float):
+        """When mental command matches pizza trigger, order pizza."""
+        cmd = getattr(config, "MENTAL_COMMAND_PIZZA", "push")
+        thresh = getattr(config, "MENTAL_COMMAND_POWER_THRESHOLD", 0.5)
+        if action == cmd and power >= thresh:
+            print(f"\n  [Mental Command] {action} (power={power:.2f}) → Ordering pizza!")
+            try:
+                from agent.pizza_order import order_pizza
+                msg = order_pizza()
+                print(f"\n  >>> Pizza: {msg[:500]}{'...' if len(msg) > 500 else ''}")
+            except Exception as e:
+                print(f"  Pizza order error: {e}")
 
     def handle_ws_payload(payload: CollectorPayload):
         nonlocal current_context_from_mac
@@ -154,6 +217,11 @@ def run_processor(port: int):
             session_tracker.update(ctx)
         if payload.eeg:
             eeg_bridge.store_metrics(payload.eeg.metrics)
+        if payload.mental_command:
+            _handle_mental_command(
+                payload.mental_command.action,
+                payload.mental_command.power,
+            )
 
     try:
         from aiohttp import web
@@ -180,6 +248,21 @@ def run_processor(port: int):
         handle_streams_payload(body)
         return web.json_response({"ok": True})
 
+    # HTTP POST /suggest_snack - preferences + budget, agent suggests (no order)
+    async def http_suggest_snack(req):
+        try:
+            body = await req.json()
+            preferences = body.get("preferences", "").strip()
+            budget = body.get("budget", 0)
+            address = body.get("address")
+            if not preferences:
+                return web.json_response({"error": "preferences required"}, status=400)
+            from agent.snack_suggestion import suggest_snack
+            result = suggest_snack(preferences=preferences, budget=budget, address=address)
+            return web.json_response({"suggestion": result})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
     # WebSocket - legacy collector.py
     async def websocket_handler(req):
         ws = web.WebSocketResponse()
@@ -200,6 +283,7 @@ def run_processor(port: int):
 
     app = web.Application()
     app.router.add_post("/eeg", http_eeg)
+    app.router.add_post("/suggest_snack", http_suggest_snack)
     app.router.add_get("/", websocket_handler)
     app.router.add_get("/ws", websocket_handler)
 
@@ -210,7 +294,8 @@ def run_processor(port: int):
         await site.start()
         print(f"Processor on 0.0.0.0:{port}")
         print(f"  WebSocket / or /ws - activity + EEG from Mac collector")
-        print(f"  POST /eeg  - streams + optional context (StreamToJetson)\n")
+        print(f"  POST /eeg  - streams + optional context (StreamToJetson)")
+        print(f"  POST /suggest_snack - preferences + budget → snack suggestions (no order)\n")
 
         while running:
             ctx = current_context_from_mac

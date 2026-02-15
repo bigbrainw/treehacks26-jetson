@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Mac Collector - Runs on Mac where EEG headset is connected.
+EEG Collector - Sends Emotiv metrics to Jetson via WebSocket.
 
-Monitors activity (active app/window) and EEG, streams both to Jetson via WebSocket.
-Jetson receives all data and runs the agent. Everything is presented on Mac.
+Activity/context data is received by the processor from an external source
+(e.g. StreamToJetson, HTTP POST /eeg). This script only streams EEG.
 
 Usage on Mac:
   python collector.py --url ws://JETSON_IP:8765
@@ -25,17 +25,15 @@ except ImportError:
     websocket = None
 
 import config
-from activity_tracker import ActivityMonitor, ActivityContext
-from data_schema import ActivitySnapshot, CollectorPayload, EEGMetricsSnapshot
+from data_schema import CollectorPayload, EEGMetricsSnapshot, MentalCommandSnapshot
 
 
 def run_collector(jetson_url: str):
-    """Run the Mac-side collector: activity + EEG → WebSocket to Jetson."""
+    """Stream EEG metrics and mental commands to Jetson via WebSocket."""
     if not websocket:
         print("Error: pip install websocket-client")
         sys.exit(1)
 
-    emotiv_client = None
     ws_ref = {"ws": None}
 
     if not config.EMOTIV_CLIENT_ID or not config.EMOTIV_CLIENT_SECRET:
@@ -52,33 +50,32 @@ def run_collector(jetson_url: str):
     try:
         from eeg import EmotivCortexClient
 
+        streams = ["met", "com"]
+
         def on_eeg_metrics(metrics: dict):
             send_payload(CollectorPayload(
                 type="eeg",
                 eeg=EEGMetricsSnapshot(metrics=metrics),
             ))
 
+        def on_mental_command(action: str, power: float):
+            send_payload(CollectorPayload(
+                type="mental_command",
+                mental_command=MentalCommandSnapshot(action=action, power=power),
+            ))
+
         emotiv_client = EmotivCortexClient(
             client_id=config.EMOTIV_CLIENT_ID,
             client_secret=config.EMOTIV_CLIENT_SECRET,
             on_metrics=on_eeg_metrics,
+            on_mental_command=on_mental_command,
+            streams=streams,
         )
         emotiv_client.connect()
-        print("  Emotiv Cortex: connecting...")
+        print("  Emotiv Cortex: connecting... (met + com)")
     except Exception as e:
         print(f"  Emotiv: {e}")
         sys.exit(1)
-
-    # Activity monitoring on Mac
-    monitor = ActivityMonitor(poll_interval=config.POLL_INTERVAL)
-
-    def on_activity_change(new_ctx: ActivityContext, prev_ctx: ActivityContext | None):
-        send_payload(CollectorPayload(
-            type="activity",
-            activity=ActivitySnapshot.from_activity_context(new_ctx),
-        ))
-
-    monitor.on_context_change(on_activity_change)
 
     running = True
 
@@ -108,10 +105,10 @@ def run_collector(jetson_url: str):
         ws_ref["ws"] = ws
         return ws
 
-    print("Mac Collector starting...")
+    print("EEG Collector starting...")
     print(f"  Target: {jetson_url}")
-    print("  Sending: activity (Mac) + EEG (Emotiv) → Jetson")
-    print("  Ctrl+C to stop\n")
+    print("  Sending: EEG + mental commands (Emotiv) → Jetson")
+    print("  Activity data: received via processor's HTTP/WebSocket endpoints\n")
 
     ws = connect_ws()
     ws_thread = threading.Thread(target=lambda: ws.run_forever())
@@ -120,9 +117,7 @@ def run_collector(jetson_url: str):
 
     time.sleep(2)
 
-    # Poll activity and send on change
     while running:
-        ctx = monitor.get_current_activity()
         time.sleep(config.POLL_INTERVAL)
 
     if emotiv_client:
@@ -131,7 +126,7 @@ def run_collector(jetson_url: str):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Mac EEG sender → Jetson")
+    p = argparse.ArgumentParser(description="EEG sender → Jetson (activity from external source)")
     p.add_argument("--url", default=config.JETSON_WS_URL, help="WebSocket URL of Jetson")
     args = p.parse_args()
     run_collector(args.url)

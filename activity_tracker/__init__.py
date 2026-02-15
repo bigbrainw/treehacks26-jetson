@@ -1,5 +1,5 @@
-"""Activity tracking - monitors active app, window, website, file."""
+"""Activity context - data structure for received activity (no monitoring)."""
 
-from .monitor import ActivityMonitor, ActivityContext
+from .monitor import ActivityContext
 
-__all__ = ["ActivityMonitor", "ActivityContext"]
+__all__ = ["ActivityContext"]

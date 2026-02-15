@@ -1,5 +1,5 @@
-# Processor (Jetson) - receives activity + EEG from Mac, runs agent
-# No local monitoring. Requires Ollama for LLM.
+# Processor - receives activity + EEG, runs agent
+# No local monitoring. Requires ANTHROPIC_API_KEY for Claude.
 
 FROM python:3.11-slim
 

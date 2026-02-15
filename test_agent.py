@@ -119,7 +119,10 @@ def run_test(mental_state_scenario: str = "focused"):
     def on_mental_state(ctx, duration, state):
         mental_state_seen.append((state.value, ctx.display_name, duration))
         # Agent decides whether to help (runs fallback when no API key)
-        assistant = FocusAssistant()
+        assistant = FocusAssistant(
+            api_key=config.ANTHROPIC_API_KEY,
+            model=config.ANTHROPIC_MODEL,
+        )
         decision = assistant.decide(
             ctx.app_name, ctx.window_title, ctx.context_type,
             duration, state.value, storage.get_recent_sessions(5),

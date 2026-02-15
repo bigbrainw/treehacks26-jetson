@@ -3,14 +3,13 @@
 Test the full agent pipeline WITHOUT EEG data.
 
 Includes: activity tracking, time-on-task, context handlers (code/browser/terminal),
-web reader (Firefox URL + content), multi-turn agent (Ollama).
+web reader (Firefox URL + content), multi-turn agent (Anthropic Claude).
 Skips: Emotiv, EEG metrics, mental-state classification.
 
-Use when you want to test the agent with real activity and Ollama, but no headset.
+Use when you want to test the agent with fixed context and Claude, but no headset.
 
 Usage:
-  python test_agent_no_eeg.py                    # real activity, mental_state=stuck
-  python test_agent_no_eeg.py --dummy           # dummy activity (no X11)
+  python test_agent_no_eeg.py                    # dummy context, mental_state=stuck
   python test_agent_no_eeg.py --mental distracted
   python test_agent_no_eeg.py --warn 3 --long 6  # custom thresholds (seconds)
 """
@@ -25,7 +24,7 @@ from pathlib import Path
 import config
 config.DB_PATH = Path(tempfile.gettempdir()) / "focus_agent_no_eeg_test.db"
 
-from activity_tracker import ActivityMonitor, ActivityContext
+from activity_tracker import ActivityContext
 from agent import MultiTurnAssistant
 from storage import Storage
 from time_tracker import SessionTracker, SessionEvent, SessionEventType
@@ -48,8 +47,8 @@ class DummyActivityMonitor:
 def run(args):
     storage = Storage(config.DB_PATH)
     assistant = MultiTurnAssistant(
-        base_url=config.OLLAMA_BASE_URL,
-        model=config.OLLAMA_MODEL,
+        api_key=config.ANTHROPIC_API_KEY,
+        model=config.ANTHROPIC_MODEL,
     )
     WARN = args.warn
     LONG = args.long
@@ -60,15 +59,11 @@ def run(args):
     )
     mental_state = args.mental
 
-    if args.dummy:
-        ctx = ActivityContext(
-            "Cursor", "main.py - treehacks26", "file", "Cursor::main.py",
-        )
-        monitor = DummyActivityMonitor(ctx)
-        print("  Mode: dummy (fixed context)")
-    else:
-        monitor = ActivityMonitor(poll_interval=1.0)
-        print("  Mode: real activity (X11)")
+    ctx = ActivityContext(
+        "Cursor", "main.py - treehacks26", "file", "Cursor::main.py",
+    )
+    monitor = DummyActivityMonitor(ctx)
+    print("  Mode: dummy (fixed context, no monitoring)")
 
     current_session_id = None
     prev_context_id = None
@@ -122,7 +117,7 @@ def run(args):
     print("\n--- Focus Agent Test (NO EEG) ---")
     print(f"  Mental state: {mental_state} (fixed, no Emotiv)")
     print(f"  Thresholds: warn={WARN}s, long={LONG}s")
-    print("  Features: activity, context handlers, web reader, multi-turn Ollama")
+    print("  Features: activity, context handlers, web reader, multi-turn Claude")
     print("  Ctrl+C to stop\n")
 
     start = time.time()
@@ -140,7 +135,6 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description="Test agent without EEG")
-    p.add_argument("--dummy", action="store_true", help="Use dummy activity (no X11)")
     p.add_argument("--mental", default="stuck", choices=["stuck", "distracted", "focused", "unknown"],
                    help="Fixed mental state (default: stuck)")
     p.add_argument("--warn", type=int, default=3, help="Warn threshold (sec)")

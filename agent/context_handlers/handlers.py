@@ -9,6 +9,33 @@ from .base import ContextHandler, EnrichedContext
 from .web_reader import get_active_page_info
 
 
+class PDFHandler(ContextHandler):
+    """Context for PDF reading (Preview, Acrobat). Uses page content for stuck-point analysis."""
+
+    name = "pdf"
+
+    def applies_to(self, context_type: str, app_name: str) -> bool:
+        return context_type == "pdf"
+
+    def enrich(self, ctx: ActivityContext, **kwargs) -> EnrichedContext:
+        page_content = getattr(ctx, "page_content", None) or ""
+        section = getattr(ctx, "reading_section", None) or ""
+        extra = (
+            f"Task: reading PDF. "
+            f"Document: {ctx.window_title or 'unknown'}. "
+            f"Section: {section}. "
+        )
+        if page_content:
+            extra += f"Page content available ({len(page_content)} chars). Use prepared resources for page-specific stuck-point analysis."
+        else:
+            extra += "Use doc title for related search."
+        return EnrichedContext(
+            extra_for_prompt=extra,
+            handler_name=self.name,
+            mcp_available=bool(page_content),
+        )
+
+
 class CodeHandler(ContextHandler):
     """
     Context for coding (IDE, editor).
@@ -71,13 +98,13 @@ class BrowserHandler(ContextHandler):
             )
             if snippet:
                 extra += f" Page snippet: {snippet[:600]}..."
-            extra += " When stuck: suggest search, explain, or summarize."
+            extra += " Infer from this content what might block or confuse them; offer specific help."
         else:
             title = ctx.window_title or ""
             extra = (
-                f"Task: web browsing. "
-                f"Page (from title): {title[:80] or 'unknown'}. "
-                f"When stuck: suggest search, explain a concept, or offer to summarize."
+                f"Task: reading. "
+                f"Content: {title[:120] or 'unknown'}. "
+                f"Infer from this topic what might block or confuse them (e.g. key concepts, dense sections); offer specific explanation or resources."
             )
         return EnrichedContext(
             extra_for_prompt=extra,

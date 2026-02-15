@@ -35,6 +35,8 @@ class EmotivCortexClient:
         client_id: str,
         client_secret: str,
         on_metrics: Optional[Callable[[dict], None]] = None,
+        on_mental_command: Optional[Callable[[str, float], None]] = None,
+        streams: Optional[list[str]] = None,
         url: str = "wss://localhost:6868",
     ):
         if not websocket:
@@ -42,6 +44,8 @@ class EmotivCortexClient:
         self.client_id = client_id
         self.client_secret = client_secret
         self.on_metrics = on_metrics or (lambda _: None)
+        self.on_mental_command = on_mental_command or (lambda _a, _p: None)
+        self._streams = streams or ["met"]
         self.url = url
         self.ws: Optional[websocket.WebSocketApp] = None
         self._thread: Optional[threading.Thread] = None
@@ -49,6 +53,7 @@ class EmotivCortexClient:
         self._session_id: Optional[str] = None
         self._headset_id: Optional[str] = None
         self._met_labels: Optional[list] = None
+        self._com_labels: Optional[list] = None
         self._req_id = 0
         self._pending: dict = {}
         self._lock = threading.Lock()
@@ -76,15 +81,27 @@ class EmotivCortexClient:
                 cb(data)
 
     def _handle_stream(self, data: dict):
-        if "met" not in data:
-            return
-        vals = data["met"]
-        labels = self._met_labels or []
-        if len(labels) != len(vals):
-            return
-        metrics = dict(zip(labels, vals))
-        metrics["time"] = data.get("time")
-        self.on_metrics(metrics)
+        if "met" in data:
+            vals = data["met"]
+            labels = self._met_labels or []
+            if len(labels) == len(vals):
+                metrics = dict(zip(labels, vals))
+                metrics["time"] = data.get("time")
+                self.on_metrics(metrics)
+        if "com" in data and "com" in self._streams:
+            vals = data["com"]
+            labels = self._com_labels or ["act", "pow"]
+            act = "neutral"
+            pow_val = 0.0
+            for i, lab in enumerate(labels):
+                if i >= len(vals):
+                    break
+                if lab == "act" and isinstance(vals[i], str):
+                    act = vals[i]
+                elif lab == "pow" and isinstance(vals[i], (int, float)):
+                    pow_val = float(vals[i])
+            if act and act != "neutral":
+                self.on_mental_command(act, pow_val)
 
     def _on_message(self, _ws, message):
         try:
@@ -182,7 +199,7 @@ class EmotivCortexClient:
         result = data.get("result", {})
         self._session_id = result.get("id")
         if self._session_id:
-            self._subscribe_met()
+            self._subscribe_streams()
 
     def _on_subscribe(self, data: dict):
         result = data.get("result", {})
@@ -190,14 +207,17 @@ class EmotivCortexClient:
             if s.get("streamName") == "met":
                 self._met_labels = s.get("cols", [])
                 print("[Emotiv] Subscribed to performance metrics (met)")
+            elif s.get("streamName") == "com":
+                self._com_labels = s.get("cols", ["act", "pow"])
+                print("[Emotiv] Subscribed to mental commands (com)")
 
-    def _subscribe_met(self):
+    def _subscribe_streams(self):
         if not self._auth_token or not self._session_id:
             return
         self._send("subscribe", {
             "cortexToken": self._auth_token,
             "session": self._session_id,
-            "streams": ["met"],
+            "streams": self._streams,
         }, self._on_subscribe)
 
     def connect(self):

@@ -1,17 +1,24 @@
-# Core dependencies
-python-xlib>=0.33; sys_platform == "linux"
-
 # Emotiv Cortex API + Mac collector → Jetson
 websocket-client>=1.6.0
 
 # Jetson processor (HTTP + WebSocket)
 aiohttp>=3.9.0
 
-# LLM Agent (OpenAI-compatible API)
-openai>=1.0.0
+# LLM Agent (Claude Agent SDK - WebSearch, WebFetch, MCP)
+claude-agent-sdk>=0.1.0
+anthropic>=0.39.0
 
 # Optional: load .env file
 python-dotenv>=1.0.0
 
 # Web reader (Firefox active tab URL + content)
 lz4>=4.0.0
+
+# MCPizza-style Domino's ordering (https://github.com/GrahamMcBain/mcpizza)
+pizzapi>=0.0.6
+
+# Uber Eats flow (optional, browser automation)
+playwright>=1.40.0
+
+# PDF page extraction (Preview, Acrobat)
+pypdf>=4.0.0
