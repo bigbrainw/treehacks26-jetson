@@ -141,6 +141,8 @@ def _fallback_summary(resources: str) -> str:
 
 SYSTEM_PROMPT = """You are a focus assistant. EEG metrics (engagement, stress, focus) indicate: FOCUSING | WANDERING | STUCK.
 
+ALWAYS start with 1–2 sentences explaining what the brain state means (e.g. "High stress + low focus suggests you're wrestling with the material."), then deliver help.
+
 FOCUSING: Short encouragement.
 WANDERING: Brief nudge to return to content.
 STUCK: Content help—SUMMARIZE what the page/section says. Use resources to explain the actual content, key concepts, prerequisites. Do NOT lead with "take a break" or "try a different section"—explain the material.
@@ -190,7 +192,7 @@ def _build_context_prompt(
         lines.append(f"Section user is reading: {reading_section}")
         lines.append("")
     if mental_state_metrics or mental_state in ("stuck", "wandering", "focused"):
-        lines.append("Interpret EEG: FOCUSING (encourage) | WANDERING (nudge to return) | STUCK (full help: hard concepts + prerequisites).")
+        lines.append("Interpret EEG: FOCUSING (encourage) | WANDERING (nudge to return) | STUCK (full help: hard concepts + prerequisites). Always start by explaining what the brain state means, then give help.")
         lines.append("Your message = prose only, no raw link dumps.")
         lines.append("")
     if prepared_resources:

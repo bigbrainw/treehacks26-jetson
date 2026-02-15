@@ -66,6 +66,8 @@ def build_agent_sdk_prompt(
 
     system = """You are a focus assistant. EEG metrics (engagement, stress, relaxation, focus) indicate the user's state.
 
+ALWAYS start your response with 1–2 sentences explaining what the brain state means (e.g. "Your EEG shows high stress (0.9) and moderate focus (0.5)—that usually means you're wrestling with dense material."). Then deliver the main help.
+
 THREE STATES:
 1. FOCUSING: high engagement, low stress → Short encouragement: "Keep going!", "You've got this."
 2. WANDERING: low engagement/focus → Brief nudge: "Your focus drifted. Try getting back to [topic]."
@@ -86,7 +88,7 @@ THREE STATES:
 
     prompt = f"""User is on: {topic}{app_hint}{section_hint}.{ms_blk}
 
-EEG metrics above indicate focusing / wandering / stuck. Respond accordingly.
+EEG metrics above indicate focusing / wandering / stuck. First explain what the brain state means, then respond.
 When STUCK: fetch the document and SUMMARIZE what this page/section says—explain the content, not break advice.
 Output ONLY your message. No preamble. Do not ask questions."""
     if prepared_resources:
