@@ -26,15 +26,12 @@ from agent.assistant import (
 )
 
 
-MULTITURN_SYSTEM = """Focus assistant. EEG = stuck means DELIVER guidance. NEVER ask questions.
+MULTITURN_SYSTEM = """Focus assistant. EEG = stuck means DELIVER content help. NEVER ask questions.
 
-CRITICAL: SYNTHESIZE the prepared resources—do NOT dump raw titles/URLs.
-1. Read the resources, then write 2–4 short paragraphs explaining KEY CONCEPTS in plain language.
-2. Connect ideas, highlight what matters, explain jargon.
-3. End with 1–2 links as "For more: [title](url)".
-
-BAD: "- Title URL: https://... - Title URL: ..."
-GOOD: "Self-attention lets each position attend to all others via Q,K,V. Scaled dot-product stabilizes training. For a visual walkthrough: [link]"
+When STUCK: Your job is to EXPLAIN the page/section content—summarize what it says, key concepts, prerequisites. Do NOT give burnout advice ("take a break", "step away") as the main response—explain the material.
+1. Use resources to DIRECTLY EXPLAIN what that page says. Do not guess.
+2. Write 2–4 short paragraphs in plain language.
+3. End with 1–2 links or a concrete next step. No "Would you like...", "Should I...".
 
 Respond with JSON only: {"should_help": bool, "message": str, "reason": str, "action_type": str}
 action_type: "offer_explanation" | "suggest_break" | "follow_up" | "none"
@@ -100,9 +97,11 @@ class MultiTurnAssistant:
         activity_context: Optional[ActivityContext] = None,
         user_feedback: Optional[str] = None,
         prepared_resources: Optional[str] = None,
+        mental_state_metrics: Optional[dict] = None,
     ) -> AssistantResponse:
         """
         Decide what to say. prepared_resources = pre-fetched in background. user_feedback = follow-up.
+        mental_state_metrics = raw EEG for agent to interpret.
         """
         context_id = activity_context.context_id if activity_context else f"{app_name}::{window_title}"
         if user_feedback:
@@ -115,8 +114,8 @@ class MultiTurnAssistant:
 
         reading_section = getattr(activity_context, "reading_section", None) if activity_context else None
 
-        # Try Claude Agent SDK first when stuck (WebSearch, WebFetch for better synthesis)
-        if mental_state == "stuck":
+        # Try Claude Agent SDK first (focusing / wandering / stuck)
+        if mental_state in ("stuck", "wandering", "focused", "unknown") or mental_state_metrics:
             try:
                 import config
                 if getattr(config, "USE_AGENT_SDK", True):
@@ -125,6 +124,9 @@ class MultiTurnAssistant:
                         window_title, mental_state,
                         prepared_resources=prepared_resources,
                         reading_section=reading_section,
+                        app_name=app_name,
+                        context_type=context_type,
+                        mental_state_metrics=mental_state_metrics,
                     )
                     if out and out.message:
                         return out
@@ -162,14 +164,17 @@ class MultiTurnAssistant:
             enriched=enriched,
             prepared_resources=resources_for_prompt,
             reading_section=reading_section,
+            mental_state_metrics=mental_state_metrics,
         )
 
         if not self._client:
+            # Fallback when no API: simple message from derived state
             return self._default_response(
                 mental_state, duration_seconds,
                 prepared_resources=prepared_resources,
                 app_name=app_name, window_title=window_title, context_type=context_type,
                 activity_context=activity_context,
+                mental_state_metrics=mental_state_metrics,
             )
 
         conv = self._conversations.get(context_id)
@@ -238,11 +243,15 @@ class MultiTurnAssistant:
         window_title: str = "",
         context_type: str = "",
         activity_context: Optional[ActivityContext] = None,
+        mental_state_metrics: Optional[dict] = None,
     ) -> AssistantResponse:
         """No hardcoded content—only deliver from background-processed resources."""
         if error:
             return AssistantResponse(
-                should_help=False, message="", reason=f"LLM: {error}", action_type="none",
+                should_help=True,
+                message=f"Agent unavailable ({error}). Set ANTHROPIC_API_KEY in .env",
+                reason="LLM error",
+                action_type="none",
             )
         if mental_state == "stuck":
             resources = prepared_resources or ""
@@ -251,20 +260,30 @@ class MultiTurnAssistant:
                 summary = " ".join(lines[:6])[:400].strip() if lines else ""
                 msg = summary if summary else ""
             else:
-                msg = ""
+                msg = "You appear stuck. Set ANTHROPIC_API_KEY for full help. Try a different section or take a short break."
             return AssistantResponse(
-                should_help=bool(msg),
+                should_help=True,
                 message=msg,
-                reason="Mental state: stuck" if msg else "No prepared resources",
-                action_type="offer_explanation" if msg else "none",
+                reason="Mental state: stuck",
+                action_type="offer_explanation",
             )
-        if mental_state == "distracted" and duration_seconds > 300:
+        if mental_state == "wandering":
             return AssistantResponse(
-                should_help=False,
-                message="",
-                reason="Mental state: distracted (no processed content)",
-                action_type="none",
+                should_help=True,
+                message="Your focus may have drifted. Try getting back to the content.",
+                reason="Mental state: wandering",
+                action_type="encourage_focus",
+            )
+        if mental_state == "focused":
+            return AssistantResponse(
+                should_help=True,
+                message="Keep going—you're on track!",
+                reason="Mental state: focused",
+                action_type="encourage_focus",
             )
         return AssistantResponse(
-            should_help=False, message="", reason="No intervention", action_type="none",
+            should_help=True,
+            message="Monitoring... Set ANTHROPIC_API_KEY for full agent responses.",
+            reason="No LLM",
+            action_type="none",
         )

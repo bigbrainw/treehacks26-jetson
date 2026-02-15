@@ -35,9 +35,10 @@ class EmotivCortexClient:
         client_id: str,
         client_secret: str,
         on_metrics: Optional[Callable[[dict], None]] = None,
-        on_mental_command: Optional[Callable[[str, float], None]] = None,
         streams: Optional[list[str]] = None,
         url: str = "wss://localhost:6868",
+        on_mental_command: Optional[Callable[[str, float], None]] = None,
+        **kwargs,
     ):
         if not websocket:
             raise ImportError("Install websocket-client: pip install websocket-client")

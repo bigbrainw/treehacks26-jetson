@@ -93,6 +93,13 @@ class EEGBridge:
         """Set Emotiv Cortex client (streaming 'met')."""
         self._emotiv = client
 
+    def get_last_metrics(self) -> Optional[dict]:
+        """Return most recent EEG metrics for agent context (engagement, stress, etc.)."""
+        if not self._recent_metrics:
+            return None
+        _, m = self._recent_metrics[-1]
+        return m.copy() if m else None
+
     def on_mental_state_detected(
         self,
         callback: Callable[..., None],

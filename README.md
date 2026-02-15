@@ -147,14 +147,16 @@ sudo systemctl enable compose.service
 **On Mac:**
 ```bash
 # Use wss:// if ngrok gives https (replace https -> wss)
-JETSON_WS_URL=wss://YOUR_NGROK_URL python collector.py
+export JETSON_WS_URL=wss://YOUR_NGROK_URL
+python collector.py --show-feedback   # EEG + overlay window for agent responses
 ```
+Or run FeedbackWindow separately: `python feedback_window.py`
 
-Requirements: `ANTHROPIC_API_KEY` and `NGROK_AUTHTOKEN` in `.env`. Data arrives via WebSocket.
+Requirements: `ANTHROPIC_API_KEY` and `NGROK_AUTHTOKEN` in `.env`. Data arrives via WebSocket. FeedbackWindow derives the poll URL from `JETSON_WS_URL` (https + /feedback).
 
 **Mac permissions:** For activity monitoring, allow "Accessibility" for Terminal (or your Python) in System Preferences → Privacy & Security.
 
-**Collector sends:** Activity (active app/window) + EEG. **Processor receives via:** WebSocket (collector.py) or HTTP POST `/eeg` (StreamToJetson).
+**Mac data formats:** Processor accepts WebSocket: `activity`, `eeg`, `mental_state`, `reading_help`, `mental_command`. POST `/eeg` with `context.mental_state=stuck` triggers agent immediately. See `data_schema.parse_mac_payload` for parsing.
 
 ## Config (`config.py`)
 
@@ -186,12 +188,31 @@ Use Emotiv mental commands to trigger actions. Train one command (e.g. **push**)
 
 **Test without headset:**
 ```bash
+# Trigger agent end-to-end (processor must be running)
+python test_trigger_agent.py
+python test_trigger_agent.py --url https://YOUR_NGROK_URL
+
+# Legacy: pizza flow directly
 python test_mental_command_pizza.py                    # configured flow (Uber Eats or search)
 python test_mental_command_pizza.py --uber-eats-only   # full Uber Eats browser flow, stop at pay
 python test_mental_command_pizza.py --search-only      # Agent SDK search only
 ```
 
 **MCPizza (Domino's):** Uses [MCPizza](https://github.com/GrahamMcBain/mcpizza)-style flow via `pizzapi` and the MCPizza API: find store → search menu → show order summary. **No order placed.** Set `PIZZA_DELIVERY_ADDRESS` for your location.
+
+## Feedback Overlay (Agent Messages)
+
+When the agent decides to help (mental state = stuck) or a mental command triggers pizza, the processor **pushes** the message over the WebSocket to connected collectors. No GET polling—feedback flows as output from monitor + EEG state.
+
+**Format:** `{"type": "feedback", "feedback": "message"}` over WebSocket
+
+**Run on Mac:**
+```bash
+python collector.py --url wss://NGROK_URL --show-feedback
+```
+The overlay receives agent output via WebSocket push.
+
+**Fallback:** `GET /feedback` still available for clients that can't use WebSocket.
 
 ## Snack Suggestion (preferences + budget)
 

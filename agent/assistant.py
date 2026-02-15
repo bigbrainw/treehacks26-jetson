@@ -19,7 +19,7 @@ from agent.context_handlers import ContextRouter
 
 
 def _rewrite_if_question(message: str, prepared_resources: Optional[str] = None) -> str:
-    """If model asked a question despite instructions, rewrite using prepared data only."""
+    """If model asked a question despite instructions, strip or rewrite."""
     forbidden = (
         "what's blocking",
         "whats blocking",
@@ -27,10 +27,25 @@ def _rewrite_if_question(message: str, prepared_resources: Optional[str] = None)
         "want me to help",
         "want me to explain",
         "want me to walk",
+        "would you like",
+        "would a quick",
+        "should i clarify",
+        "want me to clarify",
     )
     msg_lower = message.lower().strip()
     if not any(f in msg_lower for f in forbidden):
         return message
+    # Strip trailing question paragraph(s)—max 2, only if short and clearly a direct question
+    paras = [p.strip() for p in message.split("\n\n") if p.strip()]
+    removed = 0
+    while paras and removed < 2 and "?" in paras[-1] and len(paras[-1]) < 200 and any(
+        q in paras[-1].lower() for q in ("would you", "would a ", "should i ", "want me to", "like me to")
+    ):
+        paras.pop()
+        removed += 1
+    result = "\n\n".join(paras).strip()
+    if result:
+        return result
     if prepared_resources:
         lines = [l.strip() for l in prepared_resources.split("\n") if l.strip() and not l.startswith("Related")]
         summary = " ".join(lines[:6])[:400].strip() if lines else ""
@@ -124,14 +139,27 @@ def _fallback_summary(resources: str) -> str:
     intro = "Key resources for this topic: "
     return intro + ". ".join(parts[:4])[:500]
 
-SYSTEM_PROMPT = """You are a focus assistant. When EEG = stuck, you DELIVER guidance. NEVER ask questions.
+SYSTEM_PROMPT = """You are a focus assistant. EEG metrics (engagement, stress, focus) indicate: FOCUSING | WANDERING | STUCK.
 
-Your message must be helpful prose—2-4 short paragraphs explaining key concepts + 1-2 links at the end.
-Do NOT output raw link lists or "Title URL:" format.
+FOCUSING: Short encouragement.
+WANDERING: Brief nudge to return to content.
+STUCK: Content help—SUMMARIZE what the page/section says. Use resources to explain the actual content, key concepts, prerequisites. Do NOT lead with "take a break" or "try a different section"—explain the material.
+NEVER ask questions. End with a concrete summary.
 
 Respond with JSON only: {"should_help": bool, "message": str, "reason": str, "action_type": str}
-action_type: "offer_explanation" | "suggest_break" | "encourage_focus" | "offer_resources" | "none"
+action_type: "offer_explanation" | "encourage_focus" | "suggest_break" | "offer_resources" | "none"
 """
+
+
+def _format_mental_state_metrics(metrics: dict | None) -> str:
+    """Format raw EEG metrics for agent (engagement, stress, etc.)."""
+    if not metrics:
+        return ""
+    desc = {"engagement": "immersion", "stress": "tension", "relaxation": "calm", "focus": "attention", "excitement": "arousal", "interest": "attraction"}
+    parts = [f"  {k}={float(v):.2f} (0–1, {desc.get(k, k)})" for k, v in metrics.items() if isinstance(v, (int, float))]
+    if not parts:
+        return ""
+    return "EEG metrics (interpret the combination; e.g. high stress + low focus = stuck):\n" + "\n".join(parts)
 
 
 def _build_context_prompt(
@@ -144,20 +172,26 @@ def _build_context_prompt(
     enriched: Optional[str] = None,
     prepared_resources: Optional[str] = None,
     reading_section: Optional[str] = None,
+    mental_state_metrics: Optional[dict] = None,
 ) -> str:
     """Build the user message. prepared_resources = pre-fetched background data to DELIVER."""
     duration_min = round(duration_sec / 60, 1)
     lines = [
         f"User is on: {window_title}",
         f"- App: {app} | Type: {context_type}",
-        f"- Time on this: {duration_min} min | Mental state: {mental_state}",
+        f"- Time on this: {duration_min} min | Mental state (derived): {mental_state}",
         "",
     ]
+    ms_fmt = _format_mental_state_metrics(mental_state_metrics)
+    if ms_fmt:
+        lines.append(ms_fmt)
+        lines.append("")
     if reading_section:
         lines.append(f"Section user is reading: {reading_section}")
         lines.append("")
-    if mental_state == "stuck":
-        lines.append("EEG = stuck. Your message = the synthesis (prose only, no raw link dumps).")
+    if mental_state_metrics or mental_state in ("stuck", "wandering", "focused"):
+        lines.append("Interpret EEG: FOCUSING (encourage) | WANDERING (nudge to return) | STUCK (full help: hard concepts + prerequisites).")
+        lines.append("Your message = prose only, no raw link dumps.")
         lines.append("")
     if prepared_resources:
         lines.append(f"Prepared resources:\n{prepared_resources}")
@@ -165,11 +199,12 @@ def _build_context_prompt(
     if enriched:
         lines.append(f"Task context: {enriched}")
     if recent_sessions:
-        lines.append("\nRecent activity (last sessions):")
+        lines.append("\nRecent activity (background only — do NOT use for main response):")
         for s in recent_sessions[:5]:
             d = s.get("duration_seconds")
             d_str = f"{round(d/60, 1)}m" if d else "?"
             lines.append(f"- {s.get('app_name', '?')}: {s.get('window_title', '?')} ({d_str})")
+        lines.append("→ Respond ONLY about the CURRENT context above (User is on: ...).")
     return "\n".join(lines)
 
 
@@ -185,7 +220,7 @@ class FocusAssistant:
         context_router: Optional[ContextRouter] = None,
     ):
         self.api_key = api_key or ""
-        self.model = model or "claude-3-5-sonnet-20241022"
+        self.model = model or "claude-sonnet-4-5-20250929"
         self._router = context_router or ContextRouter()
         self._client = None
         if Anthropic and self.api_key:
@@ -201,12 +236,14 @@ class FocusAssistant:
         recent_sessions: list[dict],
         activity_context: Optional[ActivityContext] = None,
         prepared_resources: Optional[str] = None,
+        mental_state_metrics: Optional[dict] = None,
     ) -> AssistantResponse:
         """
         Decide what to say. prepared_resources = pre-fetched in background, deliver when EEG=stuck.
+        mental_state_metrics = raw EEG (engagement, stress, etc.) for agent to interpret.
         """
-        # Try Claude Agent SDK first when stuck (WebSearch, WebFetch for better synthesis)
-        if mental_state == "stuck":
+        # Try Claude Agent SDK first when we have context (focusing/wandering/stuck)
+        if mental_state in ("stuck", "wandering", "focused", "unknown") or mental_state_metrics:
             try:
                 import config
                 if getattr(config, "USE_AGENT_SDK", True):
@@ -216,6 +253,9 @@ class FocusAssistant:
                         window_title, mental_state,
                         prepared_resources=prepared_resources,
                         reading_section=reading_section,
+                        app_name=app_name,
+                        context_type=context_type,
+                        mental_state_metrics=mental_state_metrics,
                     )
                     if out and out.message:
                         return out
@@ -248,6 +288,7 @@ class FocusAssistant:
             enriched=enriched,
             prepared_resources=resources_for_prompt,
             reading_section=reading_section,
+            mental_state_metrics=mental_state_metrics,
         )
         try:
             resp = self._client.messages.create(
